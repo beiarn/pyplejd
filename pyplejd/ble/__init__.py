@@ -8,7 +8,7 @@ import time
 
 from bleak import BleakClient, BleakError
 from bleak.backends.device import BLEDevice
-from bleak_retry_connector import establish_connection
+from bleak_retry_connector import establish_connection, BleakClientWithServiceCache
 
 from .crypto import auth_response, encrypt_decrypt
 from . import ble_characteristics as gatt
@@ -53,7 +53,7 @@ class PlejdMesh:
     def __init__(self, manager):
         self.manager = manager
         self._mesh_devices: dict[str, MeshDevice] = {}
-        self._gateway_node = None
+        self._gateway_node: MeshDevice | None = None
         self._crypto_key: bytearray = None
         self._client: BleakClient = None
 
@@ -128,11 +128,10 @@ class PlejdMesh:
             try:
                 _CONNECTION_LOG.debug("Attempting to connect to %s", node)
                 client = await establish_connection(
-                    BleakClient,
+                    BleakClientWithServiceCache,
                     node.bleDevice,
-                    "plejd",
+                    node.bleDevice.name,
                     _disconnect,
-                    max_attempts=1,
                 )
 
                 if not await self._authenticate(client):
@@ -164,6 +163,7 @@ class PlejdMesh:
 
             if ld.command == LastData.CMD_EVENT_FIRED:
                 await self.poll_buttons()
+            return True
 
         async def _lightlevel_listener(_, lightlevel: bytearray):
             rec_log(f"lightlevel {lightlevel}")
