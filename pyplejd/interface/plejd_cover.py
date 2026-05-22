@@ -47,23 +47,6 @@ class PlejdCover(PlejdOutput):
             LastData.CMD_GROUP_OUTPUT_STATE_AND_LEVEL,
         ]:
             state.update(self._parse_state(data.payload[0], data.payload[1:]))
-            # moving = bool(data.payload[0])
-            # direction = "up" if bool(data.payload[1] & 0x80) else "down"
-
-            # # stopping = bool(data.payload[2] & 0x80)
-            # position = data.payload[1] & 0x7F
-            # target = data.payload[2] & 0x7F
-            # lost = (position > target) if direction == "up" else (target > position)
-
-            # position = position / 0x7F * 100
-            # target = target / 0x7F * 100
-            # rec_log(
-            #     f"{moving=} {direction}, {position=:.1f}% {target=:.1f}% extra={"".join(f"{b:02x}" for b in data.payload[3:])}",
-            #     self.address,
-            # )
-            # state["position"] = None if lost else position
-            # state["moving"] = moving
-            # state["opening"] = direction == "up"
 
         elif data.command == LastData.CMD_OUTPUT_SET:
             rec_log(f"MiniPkg:", self.address)
@@ -77,22 +60,6 @@ class PlejdCover(PlejdOutput):
 
         for listener in self._listeners:
             listener(self._state)
-
-    # def parse_state(self, update, state):
-    #     available = state.get("available", False)
-    #     moving = bool(state.get("state", 0))
-    #     position = state.get("cover_position", 0) / 0x7FFF * 100
-    #     opening = None
-    #     if moving:
-    #         opening = bool(position > self.previous_position)
-    #     self.previous_position = position
-    #     return {
-    #         "available": available,
-    #         "moving": bool(state.get("state", 0)),
-    #         "position": state.get("cover_position", 0) / 0x7FFF * 100,
-    #         "angle": state.get("cover_angle", 0) * 5,
-    #         "opening": opening,
-    #     }
 
     async def open(self):
         await self.set_position(100)

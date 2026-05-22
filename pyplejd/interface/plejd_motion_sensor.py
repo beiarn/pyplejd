@@ -34,20 +34,11 @@ class PlejdMotionSensor(PlejdInput):
                 rec_log(f"MiniPkg:", self.address)
                 rec_log(f"{list(data.minipkgs)}", self.address)
 
-                # for p in data.minipkgs:
-                #     if p.type == MiniPkg.TPE_LUX:
-                #         if p.payload.get(0,0) == 1:
-                #             # dark
-                #             pass
-                #         elif p.payload.get(0,0) == 2:
-                #             # light
-                #             pass
-
                 cmd = LastData(
                     address=self.address,
                     command=LastData.CMD_AMBIENT_LIGHT_LEVEL,
                 )
-                cmd.command_type=LastData.CMDT_READ
+                cmd.command_type = LastData.CMDT_READ
                 rec_log(f"Write {cmd.hex}", self.address)
                 await self._mesh.write(cmd.hex)
             case _:

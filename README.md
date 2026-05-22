@@ -22,111 +22,309 @@ Much information below is taken from here: https://github.com/icanos/hassio-plej
 
 Other things I have disocvered myself
 
-# BLE characteristic LASTDATA: `31BA0004-6085-4726-BE45-040C957391B5`
+## BLE communication
 
-Used for communication both ways
+### Characteristics:
 
-## General format
+| Name                  |                                | Description                                                                 |
+| --------------------- | ------------------------------ | --------------------------------------------------------------------------- |
+|                       | `-6085-4726-be45-040c957391b5` | Suffix for all characteristics                                              |
+| Service               | `31ba0001-`                    | Main service indicator.                                                     |
+| NodeIndexData         | `31ba0003-`                    | Basic status updates.                                                       |
+| DataVector            | `31ba0004-`                    | Sending commands to the mesh.                                               |
+| LastChangedDataVector | `31ba0005-`                    | Bi-directional communication of state. Also works for commands to the mesh. |
+| AuthKey               | `31ba0009-`                    | For cryptographic authentication with the mesh.                             |
+| PingPong              | `31ba000a-`                    | Keep-alive signal.                                                          |
 
-(two digits or letters correspond to one byte)
+### Authentication process
 
-`AA 0110 CCCC ...`
+```
+- Establish BLE Connection from Controller (C) to Gateway Device (GD)
+- C -> GD(AuthKey): 0x00
+- C <- GD(AuthKey): <challenge>
+- C -> GD(AuthKey): <response>
 
-Command `CCCC` sent to address `AA`
 
-Command `0420` is a group of command, followed by a three byte specifier: \
-`AA 0110 0420 DDDDDD ...`
+<challenge>: 32 bytes
+<response>:
+    a = <challenge> XOR <mesh key>
+    b = sha256(a)
+    <response> = b[1-16] XOR b[17-32]
+<mesh key>: 32 bytes system unique key received from Cloud
+```
 
-Some commands can be both received and sent "(R/W)". Others can be received only "(RO)" or sent only "(WO)".
+Perform a ping to confirm authentication
 
-## Scenes
+### Ping
 
-### `00 0110 0021 SS`
+Ping needs to be performed at regular intervals for the Gateway Device to maintain the connection.
 
-Activate scene `SS`
+```
+- C -> GD(PingPong): <ping>
+- C <- GD(PingPong): <pong>
 
-Always sent to address `00`. Probably a broadcast address.
 
-## Light
+<ping>: Random integer
+<pong>: <ping> + 1
+```
 
-### On/Off `AA 0110 0097 SS` (R/W)
+### NodeIndexData
 
-Turn on `SS=01` or off `SS=00` light at address `AA`.
+#### Poll state
 
-### Dim level `AA 0110 0098 SS DDDD` (R/W)
+```
+- C -> GD(NodeIndexData) 0x1
+```
 
-### `AA 0110 00C8 SS DDDD` (R0)
+#### State Report
 
-Turn on `SS=01` or off `SS=00` light at address `AA`.
+```
+- GD -> C(NodeIndexData) list[<lightlevel>]
 
-If turn on, set dim level to `DDDD`.
 
-`DDDD` is encoded **big**-endian.
-The easiest way to decode this is to ignore the first byte, and only care about the second.
-When sending the command, send the same byte twice. That way you get the dim level in the range 0-255
-instead of 0-65535, which is easieer to handle.
+Lights and relays:
+<lightlevel>: 10 bytes
+    AA SS XX XX XX XX DD DD XX XX
+    AA - Device address
+    SS - Device state (boolean)
+    DD - Device dim level
 
-### Color temperature `AA 0110 0420 030111 TTTT` (R/W)
+Cover:
+<lightlevel> (bits): AAAA AAAA MMMM MMMM [32X] UPPP PPPP XTTT TTTT
+    A - Device Address
+    Others as for Output State and Level command
 
-### `AA 0110 0420 XX0111 TTTT`
+Thermostat:
+<lightlevel> (bits): AAAA AAAA XXXX XXXM [32X] MMET TTTT TTCC CCCC
+    A - Device Address
+    Others as for Output State and Level command
+```
 
-Set color temperature of light at address `AA` to `TTTT` Kelvin.
+### LastChangedDataVector
 
-`TTTT` is encoded **little**-endian and seems to typically be the range 2200-4000 (declared in the device data from the cloud).
+#### Encryption and Decryption
 
-I have not discovered the significance of `XX`. When sending the command `03` seems to always work, but I have seen different values received.
+```
+function encrypt_decrypt(<key> <address> <data>)
+    cipher = AES-128-ECB(<key>)
+    a = cipher.encrypt(key .. key .. key[1-4])
+    return <data> XOR mod(a, 16)
+```
 
-## Motion sensor
+#### Status updates from mesh (IN)
 
-### Motion detected `AA 0110 0420 XX03XX ...` (RO)
+```
+- GD -> C(LastChangedDataVector): <encrypted data>
+<data> = encrypt_decrypt(<mesh key> <GD address> <encrypted data>)
+```
 
-Received when WMS-01 detects motion. Motion events are rate limited to about every 25-35 seconds.
+#### Commands to mesh (OUT)
 
-The command is followed by eight bytes of data. I think the last two may be related to light level, but my experiments are inconclusive. The other's may or may not have something to do with battery voltage, maybe...
+```
+- C -> GD(LastChangedDataVector): <encrypted data>
+or
+- C -> GD(DataVector): <encrypted data>
 
-## Buttons
+<encrypted data> = encrypt_decrypt(<mesh key> <GD address> <data>)
+```
 
-### Button pressed `00 0110 0016 AA BB XX` (RO)
+#### Data
 
-Button no. `BB` was pressed on the device with address `AA`.
-If `XX` is included, `XX=01` indicates the button was pressed and `XX=00` indicates it was released.
+```
+<data> format:
+    AA VV TT CC CC PAYLOAD
 
-### Request button report `00 0110 0015` (WO)
+    AA - Device Address
+    VV - Protocol version (always 0x01)
+    TT - Command type
+        0x00 - write
+        0x01 - Acknowledgement
+        0x02 - Reply
+        0x10 - Do Not Respond
+        Usually Do Not Respond for commands to the mesh
+    CC CC - Commmand
+```
+
+### Commands
+
+#### **`0x0015` - Event Prepare (OUT)**
 
 Sending this command will cause ALL buttons to send the Button Pressed command when pressed.
 Otherwise only battery powered buttons (WPH-01) will do so.
 
 This is what the Plejd app uses to identify a button when programming it. As far as I can tell, this does not affect the normal operation of the buttons.
 
-## Coverables
+Broadcast command, so the address should be 0x00.
 
-### Cover position `AA 0110 00C8 XX PPPP YY` (RO)
+```
+PAYLOAD: None
+```
 
-### `AA 0110 0098 SS PPPP YY` (RO)
+#### **`0x0016` - Event Fired (IN)**
 
-Note that this is the same command as light dim level.
+Sent by buttons when pressed after receiving Event Prepare command. Only sent once per Event Prepare command.
 
-`PPPP` is the position of the cover. Encoded **little**-endian.
+```
+PAYLOAD: AA BB [RR]
+    AA - Address
+    BB - Button index
+    RR - 0 when button is released after a long press
+```
 
-The cover will send the target position and `SS=01` while moving and `SS=00` when the movement is complete.
+#### **`0x0021` - Scene (IN/OUT)**
 
-`YY` is somehow related to the angle of the cover slats (if applicable).
-It seems to be two zero bytes followed by a **six** bit signed integer which gives the angle of the cover slats in 5 degree increments +/- 5.
+```
+PAYLOAD: SS
+    SS - Scene ID
+```
 
-If the cover is of a type going between -90 and +90, it will take those values. If the cover goes between 0 and +90, the value will be in the range [-90, 0].
+#### **`0x0097` - Output State**
 
-I've given up on reliably decoding this for the time being...
+```
+Lights and Relays (IN/OUT)
+PAYLOAD: SS
+    SS - state on/off
+```
 
-It also seems that holding the buttons for a longer time sends different commands...
+#### **`0x0098`/`0x00C8` - Output State and Level**
 
-### Set cover position `AA 0110 0420 0308 0701 PPPP` (WO)
+```
+Lights and Relays (IN/OUT)
+PAYLOAD: SS [DD DD]
+    SS - state on/off
+    DD - Two bytes dim level (optional)
 
-Set cover at address `AA` to position `PPPP`.
+Cover
+PAYLOAD (bits): MMMM MMMM UPPP PPPP XTTT TTTT
+    M - Moving (boolean)
+    U - 1: moving up, 0: moving down
+    P - Position, 7 bit integer
+    T - Target position, 7 bit integer
 
-`PPPP` is encoded **little**-endian and sets a percentage between `00` and `0xFFFF`.
+Thermostat
+PAYLOAD (bits): XXXX XXXM MMET TTTT TTCC CCCC
+    M - Mode
+    E - Error
+    T - Target temperature
+    C - Current temperature
 
-I believe the angle of the cover slats (if applicable) is adjusted by small movements after reaching the target position. I've not dived into this at the time being (see above).
+    Modes:
+    0 - service
+    2 - vacation
+    3 - boots
+    4 - frost protection
+    5 - night
+    6 - low
+    7 - normal
+```
 
-### Stop cover movement `AA 0110 0420 030807 00` (WO)
+#### **`0x0420` - Output Set**
 
-Immediately stops the movement of the cover.
+```
+PAYLOAD: list[<minipackage>]
+
+<minipackage> (bits): 0LLL TTTT <data>
+                  or: 0LLL 1111 TTTT <data>
+    L - 1 less than the number of bytes in <data>
+    T - Type. One byte or 0xF + one byte
+
+    Types
+    0001 - Whitebalance
+    0011 - Source
+    0110 - Lux
+    0111 - Window Control
+    1111 0001 - Channel
+    1111 0111 - Battery Info
+    1111 1001 - Tilt
+```
+
+Each command may include several minipackages
+
+- Color temperature of light (IN):
+
+```
+minipackage(type=Whitebalance, data=<wb>)
+
+<wb>: Color temperature in K
+```
+
+- Motion detected (IN):
+
+```
+minipackage(type=Source, data=0x03)
+```
+
+- Battery level (IN):
+
+```
+minipackage(type=Battery Info, data=<charge level>)
+
+<charge level>: Probably 0-255
+```
+
+- Ambient light (IN):
+
+```
+minipackage(type=Lux, data=<ll>)
+
+<ll>: Light Level. 0x2 is above threshold. Anything else is below.
+```
+
+- Set color temperature of light (OUT):
+
+```
+PAYLOAD: minipackage(type=Source, data=0x01) minipackage(type=Whitebalance, data=<wb>)
+
+<wb>: Color temperature in K. 2 bytes
+```
+
+- Set position of cover (OUT):
+
+```
+PAYLOAD: minipackage(type=Source, data=0x08) [minipackage(type=Window Control, data=0x1 <level> <level>)] [minipackage(type=Tilt, data=<tilt>)]
+
+<level>: Position 0-255
+<tilt>: Tilt position 0-255
+```
+
+- Stop movement of cover (OUT):
+
+```
+PAYLOAD: minipackage(type=Source, data=0x08) minipackage(type=Window Control, data=0)
+```
+
+#### **`0x045C` - Thermostat Temperature Setpoint**
+
+```
+IN:
+PAYLOAD: XX XX XX XX XX XX TT TT
+
+    TT - Temperature (little-endian)
+
+OUT:
+PAYLOAD: TT TT
+    TT - Temperature (little-endian)
+```
+
+#### **`0x0461` - Thermostat Mode (OUT)**
+
+```
+PAYLOAD: MM
+    MM - Operating mode (same as Output State and Level)
+
+#### **`0x0461` - Thermostat PWM Setpoint**
+
+```
+
+IN:
+PAYLOAD: XX XX XX XX XX XX SS
+
+    SS - Setpoint
+
+OUT:
+PAYLOAD: TT
+SS - Setpoint
+
+```
+
+```
