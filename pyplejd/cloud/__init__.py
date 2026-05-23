@@ -173,6 +173,8 @@ class PlejdCloudSite:
 
                 device = details.find_device(objectId=settings.deviceParseId)
 
+                if not device:
+                    continue
                 room = details.find_room(device.roomId)
 
                 rxAddress = details.rxAddress.get(deviceId, {}).get(str(output), -1)
