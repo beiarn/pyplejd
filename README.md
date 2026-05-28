@@ -173,6 +173,8 @@ PAYLOAD: AA BB [RR]
 
 #### **`0x0021` - Scene (IN/OUT)**
 
+This is a broadcast event, so the Device Address is always 0.
+
 ```
 PAYLOAD: SS
     SS - Scene ID
@@ -193,6 +195,7 @@ Lights and Relays (IN/OUT)
 PAYLOAD: SS [DD DD]
     SS - state on/off
     DD - Two bytes dim level (optional)
+Tip: Send the same byte DD twice. That gives 255 dim levels and you don't have to worry about endianness. This is what the Plejd app seems to do.
 
 Cover
 PAYLOAD (bits): MMMM MMMM UPPP PPPP XTTT TTTT
@@ -209,7 +212,7 @@ PAYLOAD (bits): XXXX XXXM MMET TTTT TTCC CCCC
     C - Current temperature
 
     Modes:
-    0 - service
+    0 - service/off
     2 - vacation
     3 - boots
     4 - frost protection
@@ -303,7 +306,7 @@ PAYLOAD: XX XX XX XX XX XX TT TT
 
 OUT:
 PAYLOAD: TT TT
-    TT - Temperature (little-endian)
+    TT - Temperature (little-endian) in units of 0.1 degC
 ```
 
 #### **`0x0461` - Thermostat Mode (OUT)**
@@ -311,20 +314,17 @@ PAYLOAD: TT TT
 ```
 PAYLOAD: MM
     MM - Operating mode (same as Output State and Level)
+```
 
 #### **`0x0461` - Thermostat PWM Setpoint**
 
 ```
-
 IN:
 PAYLOAD: XX XX XX XX XX XX SS
 
     SS - Setpoint
 
 OUT:
-PAYLOAD: TT
-SS - Setpoint
-
-```
-
+PAYLOAD: SS
+    SS - Setpoint
 ```
