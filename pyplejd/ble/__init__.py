@@ -121,6 +121,7 @@ class PlejdMesh:
                     BleakClientWithServiceCache,
                     node.bleDevice,
                     node.bleDevice.name,
+                    max_attempts=2,
                 )
 
                 # Workaround for problem in plejd firmware 2026-05-20
@@ -203,13 +204,12 @@ class PlejdMesh:
         async with self._ble_lock:
             if not await self.connect():
                 return False
+            if not await self._ping(self._client):
+                return False
 
-            if await self._ping(self._client):
-                await self.poll()
-                await self.poll_buttons()
-                return True
-
-        return False
+        await self.poll()
+        await self.poll_buttons()
+        return True
 
     async def poll_time(self, address: int):
         if not self.connected:

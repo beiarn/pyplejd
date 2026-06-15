@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import asyncio
 from datetime import timedelta
 
 from bleak_retry_connector import close_stale_connections
@@ -15,7 +16,6 @@ from .interface import (
     sceneDeviceClass,
     DeviceTypes,
 )
-
 
 __all__ = [
     "PlejdManager",
@@ -48,6 +48,7 @@ class PlejdManager:
         self._blacklist = set()  # TODO: MAKE WORK
         self.cloud = PlejdCloudSite(**self.credentials)
         self.options = {}
+        self.connection_monitor = None
 
     @property
     def blacklist(self):
@@ -70,6 +71,8 @@ class PlejdManager:
     def connect_callback(self, connected: bool):
         for d in self.devices:
             d.set_available(connected)
+        if self.connection_monitor:
+            self.connection_monitor(connected)
 
     async def lightlevel_callback(self, lightlevels: list[LightLevel]):
         for ll in lightlevels:
@@ -147,10 +150,13 @@ class PlejdManager:
 
     @property
     def ping_interval(self):
-        return timedelta(minutes=10)
+        return timedelta(minutes=3)
 
-    async def ping(self):
+    async def ping(self, retry=True):
         retval = await self.mesh.ping()
+        if not retval and retry:
+            await asyncio.sleep(30)
+            retval = await self.mesh.ping()
         return retval
 
     async def broadcast_time(self):
