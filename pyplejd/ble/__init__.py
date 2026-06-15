@@ -77,14 +77,16 @@ class PlejdMesh:
         self._crypto_key = key
 
     async def disconnect(self):
-        if not self._client:
+        if not self.connected:
             return False
+
         try:
             await self._client.stop_notify(gatt.PLEJD_LASTDATA)
             await self._client.stop_notify(gatt.PLEJD_LIGHTLEVEL)
             await self._client.disconnect()
         except BleakError:
             pass
+
         self._client = None
         self.manager.connect_callback(False)
 
@@ -109,19 +111,7 @@ class PlejdMesh:
         )
         sorted_nodes = sorted(filtered_nodes, key=lambda n: n.rssi, reverse=True)
 
-        # _CONNECTION_LOG.debug(f"Expected nodes: {self._expected_nodes}")
-        # _CONNECTION_LOG.debug(f"Connectable expected nodes: {self._connectable_nodes}")
-
-        # _CONNECTION_LOG.debug(f"Seen nodes: {self._seen_nodes}")
-        # _CONNECTION_LOG.debug(f"Connectable, seen nodes: {filtered_nodes}")
-        # _CONNECTION_LOG.debug(f"Sorted by signal strength: {sorted_nodes}")
-
         if not sorted_nodes:
-            # _CONNECTION_LOG.debug(
-            #     "Failed to connect to plejd mesh - No valid devices: %s (%s)",
-            #     self._seen_nodes,
-            #     self._connectable_nodes,
-            # )
             return False
         client = None
         for node in sorted_nodes:
@@ -166,6 +156,8 @@ class PlejdMesh:
             return False
 
         async def _lastdata_listener(_arg, lastdata: bytearray):
+            if not self.connected:
+                return
 
             data = encrypt_decrypt(
                 self._crypto_key, self._gateway_node.BLEaddress, lastdata
@@ -180,6 +172,9 @@ class PlejdMesh:
             return True
 
         async def _lightlevel_listener(_, lightlevel: bytearray):
+            if not self.connected:
+                return
+
             rec_log(f"lightlevel {lightlevel}")
             await self.manager.lightlevel_callback(parse_lightlevels(lightlevel))
 
@@ -193,35 +188,37 @@ class PlejdMesh:
         return True
 
     async def poll(self):
-        client = self._client
-        if client is None:
+        if not self.connected:
             return
+
         _LOGGER.debug("Polling mesh for current state")
-        await client.write_gatt_char(gatt.PLEJD_LIGHTLEVEL, b"\x01", response=True)
+        await self._client.write_gatt_char(
+            gatt.PLEJD_LIGHTLEVEL, b"\x01", response=True
+        )
 
     async def poll_buttons(self):
         await self.write(LastData(command=LastData.CMD_EVENT_PREPARE).hex)
 
     async def ping(self):
-        retval = False
         async with self._ble_lock:
             if not await self.connect():
-                retval = False
+                return False
+
             if await self._ping(self._client):
                 await self.poll()
-                retval = True
-        if retval:
-            await self.poll_buttons()
-        return retval
+                await self.poll_buttons()
+                return True
+
+        return False
 
     async def poll_time(self, address: int):
-        client = self._client
-        if client is None:
-            return False
+        if not self.connected:
+            return
+
         payloads = payload_encode.request_time(self, address)
         await self.write(payloads)
 
-        retval = await client.read_gatt_char(gatt.PLEJD_LASTDATA)
+        retval = await self._client.read_gatt_char(gatt.PLEJD_LASTDATA)
         data = encrypt_decrypt(self._crypto_key, self._gateway_node.BLEaddress, retval)
         ts = int.from_bytes(data[5:9], "little")
         dt = datetime.fromtimestamp(ts)
@@ -237,6 +234,9 @@ class PlejdMesh:
         await self.write(payloads)
 
     async def write(self, *payloads: list[str]):
+        if not self.connected:
+            return
+
         pl = [
             encrypt_decrypt(
                 self._crypto_key,
@@ -249,9 +249,9 @@ class PlejdMesh:
         await self._write(pl)
 
     async def _write(self, payloads):
-        client = self._client
-        if client is None:
-            return False
+        if not self.connected:
+            return
+
         try:
             async with self._ble_lock:
                 for payload in payloads:
